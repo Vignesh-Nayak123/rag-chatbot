@@ -1,0 +1,223 @@
+# Agentic RAG system
+
+An agentic Retrieval-Augmented Generation chatbot that autonomously routes between document retrieval, web search, Wikipedia, live stock prices, and web reader tools — built on **LangGraph**, served through **Groq (GPT-OSS 120B)**, and rigorously evaluated with **RAGAS** and monitored using **langsmith**.
+
+Adding a cross-encoder reranker on top of hybrid retrieval took **Context Precision from 0.625 to 1.0** and **Context Recall to a perfect 1.0**, with retrieval quality independently verified across two full RAGAS evaluation passes on unseen,
+
+---
+
+## Highlights
+
+- Hybrid Retrieval — **ChromaDB (dense) + BM25 (sparse)** via LangChain's `EnsembleRetriever`
+- **Cross-encoder reranking** (ms-marco-MiniLM-L-6-v2) on top of hybrid retrieval to filter retrieval noise
+- LangGraph ReAct agent with autonomous, prompt-governed tool selection
+- Per-thread persistent PDF knowledge base with isolated vector stores
+- SQLite-based persistent conversational memory
+- Streaming responses in Streamlit
+- Evaluated end-to-end using **RAGAS**, with a documented before/after comparison across three retrieval configurations
+- LangSmith observability with tracing and latency monitoring
+
+---
+
+# Features
+
+- **Hybrid + Reranked RAG** — Upload a PDF and chat with it using dense + sparse retrieval, refined by a cross-encoder reranker before context reaches the LLM.
+- **Autonomous Tool Selection** — The agent decides which tool to invoke based on the query, governed by an explicit tool-use policy in the system prompt (see *Key Design Decisions* below).
+- **Web Search** — Real-time web search powered by TAVILY
+- **Wikipedia Search** — Retrieve factual information from Wikipedia.
+- **Reader Tool** — Fetch and extract readable text from webpages using `requests` and `BeautifulSoup`, allowing the agent to retrieve information directly from a provided URL.
+- **Live Stock Price Tool** — Retrieve real-time stock prices using Alpha Vantage.
+- **Persistent Chat Memory** — SQLite checkpointing preserves conversation history across application restarts.
+- **Per-thread PDF Isolation** — Each conversation maintains an independent document index and memory.
+- **Resume Previous Conversations** — Continue any previous chat from the sidebar.
+- **Streaming Responses** — Token-by-token response generation for improved user experience.
+  - **Observability** — LangSmith tracing for monitoring agent executions, latency, errors, and token usage.
+
+---
+
+# Architecture
+
+```
+User Input
+      │
+      ▼
+Streamlit Frontend
+      │
+      ▼
+LangGraph ReAct Agent
+      │
+      ▼
+LLM decides which tool to invoke
+      │
+ ┌────┼──────────┬──────────┬──────────┬────────────┐
+ │    │          │          │          │            │
+ ▼    ▼          ▼          ▼          ▼
+Tavily  reader   Stocks   Wikipedia   Hybrid RAG
+                                              │
+                             ┌────────────────┴──────────────┐
+                             │                                │
+                             ▼                                ▼
+                     ChromaDB Retriever              BM25 Retriever
+                             │                                │
+                             └──────── EnsembleRetriever ─────┘
+                                              │
+                                              ▼
+                                  Cross-Encoder Reranker
+                                     (ms-macro-MiliLM)
+                                              │
+                                              ▼
+                                    Top-k Reranked Context
+                                              │
+                                              ▼
+                                  GPT-OSS 120B (Groq)
+                                              │
+                                              ▼
+                                   Streaming Response
+```
+
+---
+
+# Tech Stack
+
+| Component | Technology |
+|------------|------------|
+| LLM | OpenAI GPT-OSS 120B (via Groq) |
+| Agent Framework | LangGraph |
+| Frontend | Streamlit |
+| Embedding Model | HuggingFace "BAAI/bge-small-en-v1.5 |
+| Reranker |cross-encoder/ms-marco-MiniLM-L-6-v2|
+| Vector Database | ChromaDB |
+| Keyword Retriever | BM25 |
+| Hybrid Retriever | LangChain EnsembleRetriever |
+| Persistent Memory | SQLite Checkpointer |
+| Web Search | Tavily |
+| Knowledge Search | Wikipedia |
+| Stock API | Alpha Vantage |
+| Evaluation | RAGAS |
+
+---
+
+# Project Structure
+
+```
+agentic_rag_chatbot/
+├── langgraph_rag_backend.py
+├── streamlit_rag_frontend.py
+├── evaluate_rag.py
+├── ragas_results.csv                   # baseline (pre-reranker) evaluation
+├── ragas_results_with_reranker.csv     # post-reranker evaluation
+├── requirements.txt
+├── .gitignore
+└── README.md
+```
+
+---
+
+# Setup
+
+### Clone Repository
+
+```bash
+git clone https://github.com/jinendrajain765/Agentic_rag_chatbot.git
+cd Agentic_rag_chatbot
+```
+
+### Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Configure Environment Variables
+
+Create a `.env` file and add:
+
+```
+GROQ_API_KEY=your_api_key
+```
+
+### Run
+
+```bash
+streamlit run streamlit_rag_frontend.py
+```
+
+---
+
+# How It Works
+
+The chatbot follows the **ReAct (Reason + Act)** workflow.
+
+1. The user submits a query.
+2. GPT-OSS 120B determines whether a tool is required.
+3. If necessary, LangGraph invokes the selected tool.
+4. Tool outputs are returned to the model.
+5. The model synthesizes the final response and streams it back to the user.
+
+This allows the chatbot to dynamically decide which tool to use without hardcoded routing logic.
+
+---
+
+# Key Design Decisions
+
+### Hybrid Retrieval + Reranking
+
+The retrieval pipeline combines **semantic search (ChromaDB)** with **keyword search (BM25)** via LangChain's `EnsembleRetriever`, then re-scores the merged candidate set with a **cross-encoder reranker** (cross-encoder/ms-marco-MiniLM-L-6-v2|) before the top results reach the LLM. Hybrid search alone widened recall but left retrieval noise in the final context; the reranker was added specifically to address that gap — measured directly through RAGAS Context Precision (see *RAG Evaluation* below).
+
+
+### Per-thread Document Isolation
+
+Each conversation maintains an independent ChromaDB vector store (`./chroma_db/{thread_id}`), ensuring uploaded documents remain isolated between conversations.
+
+### Persistent Memory
+
+SQLite checkpointing preserves chat history across application restarts, enabling long-running conversations. 
+
+
+### Streaming Responses
+
+Responses are streamed token-by-token to provide a more responsive user experience.
+
+---
+
+# RAG Evaluation
+
+The retrieval pipeline was evaluated using **RAGAS** across three configurations: similarity search alone, hybrid retrieval, and hybrid retrieval + cross-encoder reranking. The final evaluation pass used a purpose-built, entirely fictional benchmark document — invented company, product, and figures — specifically so that a correct answer could only come from retrieval, not from the LLM's own training knowledge, isolating retrieval quality from parametric recall.
+
+## Full Comparison: Similarity Search → Hybrid Retrieval → Hybrid + Reranking
+
+| Metric | Similarity Search | Hybrid Retrieval | Hybrid + Reranking |
+|---------|------------------:|------------------:|--------------------:|
+| Faithfulness | 1.0000 | 1.0000 | 0.7917 |
+| Answer Relevancy | 0.7000 | 0.7617 | 0.7961 |
+| Context Precision | 0.6100 | 0.6250 | **1.0000** |
+| Context Recall | N/A | 1.0000 | **1.0000** |
+
+**Context Precision improved from 0.625 to a perfect 1.0** after adding the reranker, confirming it successfully filters retrieval noise that hybrid search alone left behind. Context Recall held at a perfect 1.0, meaning no relevant information was lost in the process. Answer Relevancy also improved.
+
+
+Full per-question results are available in [`ragas_results.csv`](./ragas_results.csv) (baseline) and [`ragas_results_with_reranker.csv`](./ragas_results_with_reranker.csv) (post-reranker).
+
+---
+## Observability
+
+**LangSmith** is integrated for tracing and monitoring the chatbot's execution flow.
+
+It is used to track:
+- Agent and tool executions
+- End-to-end latency
+- Errors during execution
+- Token usage and cost
+
+Across 50 traced runs, the application recorded a **1.10s P50 latency**.
+
+# Example Queries
+
+| Query | Tool |
+|--------|------|
+| Who prepared these digital notes? | Hybrid RAG |
+| What is the stock price of AAPL? | Stock Tool |
+| Latest AI news | Tavily |
+| Who is Lionel Messi? | Wikipedia |
+
+---

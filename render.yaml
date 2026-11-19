@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: agentic-rag-chatbot
+    runtime: python
+    # Standard = 2 GB RAM. torch + embedding model + reranker don't fit in the 512 MB plans.
+    plan: standard
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run streamlit_rag_frontend.py --server.port $PORT --server.address 0.0.0.0
+    healthCheckPath: /_stcore/health
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.3
+      # chatbot.db and chroma_db/ live on the persistent disk
+      - key: DATA_DIR
+        value: /var/data
+      # cache downloaded HuggingFace models on the disk so restarts don't re-download them
+      - key: HF_HOME
+        value: /var/data/hf_cache
+      # secrets: Render asks for these values when you create the Blueprint
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
